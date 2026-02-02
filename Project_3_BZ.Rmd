@@ -1,0 +1,754 @@
+---
+title: "Verarbeitung und Speicherung großer Datenmengen - Project B"
+author: "Zamberger Bernd"
+date: "02.01.2024 - 05.01.2024"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+    fig_height: 7
+    fig_width: 10
+---
+
+# Introduction
+
+In this project the goal is to investigate a data set and make an attempt to answer predefined questions. The project is part of the course 'Verarbeitung und Speicherung großer Datenmengen' in the Wintersemester 2023 at the *Fachhochschule Wiener Neustadt*.
+
+The preset structure of the project is given as follows:
+
+1.  read the data set from Moodle
+2.  visualize distributions of variables
+3.  make appropriate transformations
+4.  de-select original variables which you transformed
+5.  set.seed(Matrikelnummer)
+6.  assign Train to each observation
+7.  apply the script we're going through to the new data set (all the methods)
+8.  write your conclusions in a Rmd, pdf report
+
+## Setup
+
+Initially we need to load the necessary packages. (Chunk option: results='hide')
+```{r setup, results='hide'}
+# Define the packages to install
+packages <- c("ggplot2", "reshape2", "hexbin", "tidyverse", "modelr", "reshape2", "MASS", "dplyr", "ggraph", "gridExtra", "glmnet")
+
+# Loop over the packages and install them if they are not already installed
+for (package in packages) {
+ if (!require(package, character.only = TRUE)) {
+   install.packages(package)
+ }
+}
+
+# Load the packages
+library(ggplot2)
+library(reshape2)
+library(hexbin)
+library(tidyverse)
+library(modelr)
+library(reshape2)
+library(MASS)
+library(dplyr)
+library(ggraph)
+library(gridExtra)
+library(glmnet)
+```
+
+## Set Seed
+
+To allow for reproducible research a seed is set to facilitate reproducible research for processes with randomization. 
+```{r set_seed}
+set.seed(202375)
+```
+
+# Read the data set from moodle
+
+The data set was downloaded to the local machine (Windows 11, OS build 22621.2861)and uploaded into the server directory via the Rstudio for Browser interface, since the data set is not the opensource version. During the Analysis of the data set, it was recognized as a reduced data set constructed from the [King County House Sale Prices] (https://github.com/viviandng/KC_House_Price).
+
+The same data set was used in the Kaggle-competition[kc_house_data](https://www.kaggle.com/datasets/shivachandel/kc-house-data), where some intresting approaches for prediction and analysis can also be found. 
+
+The difference between the original and provided data set were in the number of columns/variables of each, since some of the columns in the original set were dropped. 
+
+```{r import, include=FALSE}
+project_path <- ("/proj/courses/2023_mg/cooler/Verarbeitung_Datenmengen/Project_3_dataset")
+
+raw_data_path <- "/proj/courses/2023_mg/cooler/Verarbeitung_Datenmengen/Project_3_dataset/housing_raw.csv"
+
+raw_data <- read.csv(raw_data_path)
+```
+
+# Data Exploration 
+
+To get some grasp of the data set we are handling, we can look at the structure of our import.
+
+```{r datatable}
+head(raw_data)
+```
+
+This tells us, that we have 15 Columns, and most often integer or numeric values. 
+
+```{r data-dimensions}
+str(raw_data)
+```
+The data set has 21613 entries (observations). 
+```{r exploratory visualization}
+
+# Create a new dataframe with average price for each lat-long pair
+# avg_price_df <- raw_data %>% group_by(lat, long) %>% summarise(avg_price = mean(price))
+
+
+data.frame(long = raw_data$long, lat = raw_data$lat) %>%
+ ggplot(aes(long, lat, fill = after_stat(count))) + 
+ geom_hex(bins = 75) +
+ scale_fill_viridis_c() + 
+ labs(
+ title = "geographical sales distribution", 
+ x="Longitude", 
+ y="Latitude"
+ )
+
+data.frame(raw_data$long, raw_data$lat, raw_data$price)%>%
+  ggplot(aes(raw_data$long, raw_data$lat, z=raw_data$price)) + 
+  stat_summary_hex(fun = function(price) mean(price), bins = 75) +
+  scale_fill_viridis_c() + 
+  labs(
+    title = "geographical value distribution", 
+    x="Longitude", 
+    y="Latitude"
+  )
+```
+Here we can see some interesting details, which ultimately could lead to deeper insights. For example, that the sales in general seem to be well distributed, with a region in the North-West were relatively more houses were sold. Additionally we can conclude, that a region between some Lakes (Lake Washington and Lake Sammamish) correlate with the higher house prices (for sold houses).
+
+## Data manipulation - Making the appropriate transformations
+
+Are we fine with the datatypes assigned?\
+Interestingly the 'bedrooms' and 'bathrooms' columns, do not have the same datatype (int or num) so an investigation into at all the dataypes should be performed and, if deemed necessary, transform our variables to a more fitting type. Additionally, here the decision to manipulate the data in a new dataframe (called df) was made, to keep the original data for developing purposes. 
+
+```{r column-types-1}
+df<-raw_data
+df$waterfront <- ifelse(df$waterfront == 0, FALSE, TRUE)
+unique(df$waterfront)
+```
+
+Transforming the zip-code from integer to a categorical variable, since they do not have a numerical meaning.
+
+```{r zipcode}
+df$zipcode <- as.factor(df$zipcode)
+length(unique(df$zipcode))
+```
+
+Transforming the view into categorial, for similar reseons as above. 
+
+```{r view}
+(unique(df$view))
+```
+
+Investigating the numerical or integer values of these. (Which values are underneath the variables.)
+
+```{r column-types-2, collapse=TRUE}
+print(sort(unique(df$floors)))
+class(df$floors)
+
+print(sort(unique(df$bedrooms)))
+class(df$bedrooms)
+
+print(sort(unique(df$view)))
+class(df$view)
+
+print(sort(unique(df$grade)))
+class(df$grade)
+
+print(sort(unique(df$condition)))
+class(df$condition)
+```
+The datatypes of these variables above might hint to their nature, but it is somewhat unclear what a value of 2.5 represents in the 'floors' category.
+
+### Waterfront
+
+But how does the waterfront influence the price?
+
+```{r price_waterfront}
+p_wf_1 <- ggplot(df, aes(x = waterfront, y = price)) + geom_boxplot()
+p_wf_2 <- ggplot(df, aes(x = waterfront, y = price)) + geom_violin()
+
+grid.arrange(p_wf_1, p_wf_2, ncol=2)
+```
+
+Here a logistic regression is appropriate, since waterfront is not a continues variable:
+
+```{r waterfront-model, fig.width=5, fig.height=3, fig.align='center', error=TRUE}
+# Fit the logistic regression model
+model_logistic <- glm(waterfront ~ price, family = binomial, data = df)
+ # Family objects provide a convenient way to specify the details of the models 
+
+# Create a new plotting window and set the plotting area into a 1*2 array
+par(mfrow = c(1, 2))
+
+# Print the summary of the first model
+plot(model_logistic)
+
+summary(model_logistic)
+```
+The plots can be interpreted as follows: 
+
+* the Residual vs. fitted plot shows, that there might be a two populations mixed, and one populations does not have a large influence on the model. 
+* Similar conclusions could be drawn from the Scale-Location plot. 
+* The Residuals vs. Leverage plot shows, that some of the datapoints to have relative extreme values, although they do not cross the Cook's distance. If we consider to include a model with the differentiation based on the boolean category 'waterfront', a deeper analysis of these values could be benefitial to the models performance.
+
+For the logistic regression model the Akaike Information Criterion (AIC) is given with a value of *1492.1*. Unfortunately this value in itself gives only relative information and it could be later used to compare it to other models. The information contained in it is based on the goodness of fit, and the complexity of the model.
+
+Without further knowledge about the origin and nature of the data set, we are going to continue to step 2 of the exercise, to visualize the distribution of the variables. here we are going to differentiate between the datatypes of the variables.
+
+Interestingly the category 'floors' is an numeral, and increases in half steps, till it reaches its maximum at 3.5.
+
+```{r column-types-3, fig.width=5, fig.height=3}
+
+floor_counts <- table(df$floors)
+
+# Convert the table into a data frame
+floor_df <- as.data.frame(floor_counts)
+names(floor_df) <- c("Floors", "Count")
+
+# Create the bar plot
+ggplot(floor_df, aes(x = Floors, y = Count)) +
+ geom_bar(stat = "identity") +
+ theme_minimal() +
+ labs(
+  title = "Distribution of the number Floors",
+  x = "Number of Floors", 
+  y = "Count"
+ )
+
+
+```
+
+# Visualize distributions of variables
+
+```{r numerical_values_plot, include=FALSE}
+# filter
+num_cols <- sapply(df, is.numeric) # filter all columns, which are numeric
+df_num <- df[, num_cols]
+
+# pair the columns and plot them
+pairs(df_num[1:3])
+pairs(df_num[4:6])
+pairs(df_num[7:9])
+pairs(df_num[9:11])
+pairs(df_num[12:13])
+plot(df_num[12:13])
+```
+
+In this analysis, we are not going to delve into the geographical analysis, and therefore, we are going to exlude the last two categories "lat" and "long"
+
+```{r collapse=TRUE}
+# drop the 'zipcode' and 'lat'-columns
+df_num_subset <- df_num[1:12]
+
+head(df_num_subset)
+```
+
+## Filtering of individual entries
+
+(displaying extreme values)  
+During the previous visualization step, some individual entries, with extreme values were detected. We want to identify them, and remove them from the data set, since they are not going to help explain the majority of the data. Interesting values were detected in the prize- and bedrooms-category. All other seem not that extreme.
+
+```{r}
+# show entry with more than 30 bathrooms
+dim(df_num) # length of dataframe, for validation purposes (! different dataframe, since we are going to overwrite the subset)
+
+# return the entries, which we are going to remove
+print(df_num_subset[(which(df_num_subset$bedrooms>30)),])
+
+# remove the entires and overwrite the dataframe
+df_num_subset <- df[df_num_subset$bedrooms <= 30, ]
+dim(df_num_subset) # validate the removal, by comparison of the dataframe
+```
+
+## visualizations {.tabset}
+
+### Cleanup of the dataframe
+
+```{r}
+
+# Get the names of all columns except the first one
+second_col <- colnames(df_num_subset)[2]
+
+# Identify the boolean columns
+bool_cols <- sapply(df_num_subset, is.logical)
+
+# Drop the boolean columns
+df_clean <- subset(df_num_subset, select = -which(bool_cols))
+
+# Drop 'zipcode' from the dataframe, since we need a numerical later on
+df_clean_numerical <- subset(df_clean, select = -zipcode)
+
+```
+
+to identify variables which are highly correlated the pearson correlation factor can be calculated. This should allow for the filtering of the variables which are highly correlated with price.
+
+```{r corr_matrix}
+# Calculate a correlation matrix
+corr_matrix <- cor(df_clean_numerical)
+
+# Reshape the correlation matrix into a long format
+melted_corr_matrix <- melt(corr_matrix)
+
+# Create the heatmap
+ggplot(data = melted_corr_matrix, aes(Var2, Var1, fill = value)) +
+ geom_tile(color = "white") +
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+  midpoint = 0, limit = c(-1,1), space = "Lab", 
+  name="Pearson\nCorrelation") +
+ theme_minimal() + 
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+   size = 12, hjust = 1)) +
+ coord_fixed()
+```
+
+To create a accurate model, we are going to model individual variables and comparing their accuracy. As a measure for comparison the Mean Squared Error or the Root Mean Squared Error will be evaluated. 
+
+```{r corr_with_price}
+
+# Get the correlations with price
+corr_price <- corr_matrix[,"price"]
+
+# Sort the correlations in descending order
+sorted_corr_price <- sort(corr_price, decreasing = TRUE)
+
+# Print the top 5 correlations
+head(sorted_corr_price, 6)
+```
+
+so now we know, that the highest (Pearson) correlation to price in our data set is with the variables sqft_living, grade, bathrooms, and view.
+
+### Plots
+
+{section_plots}
+
+```{r, fig.height=3, fig.width=5}
+# Loop over the columns
+for (col in colnames(df_clean)[-2]) {
+ # Create the plot
+ p <- ggplot(df_clean, aes(.data[[col]], .data[[second_col]])) +
+ geom_hex() +
+ labs(title = paste("Scatter-(/Hex-)plot of", col, "vs", second_col), x = col, y = second_col)
+ 
+ # Print the plot
+ print(p)
+}
+
+```
+
+## Split data set in Training and Testing set
+
+```{r}
+# Use 70% of the data set as the training set and 30% as the test set
+train_sample <- sample(c(TRUE, FALSE), nrow(df_clean), replace=TRUE, prob=c(0.7,0.3))
+
+# Assign the training and test sets
+train_set <- df_clean[train_sample, ]
+test_set <- df_clean[!train_sample, ]
+
+```
+
+# Model creation
+
+## Model 1 (linear sqft)
+
+create a linear model with the house size 'sqft_living' as a single variable and test it against the test data set. The assumption in that model is that the "square footage of house's living space" can explain the house price. The quality of the prediction will suffer from the simplification, that all other variables will have at least some influence on the house price. \
+(The summary(model_1) can be found with all the models at the end of the report.)
+
+```{r m1_test}
+# Fit the model using the training set
+model_1 <- lm(price ~ sqft_living, data = train_set)
+
+# Predict the target variable using the model and the training set
+train_pred_1 <- predict(model_1, newdata = train_set)
+
+# Predict the target variable using the model and the test set
+test_pred_1 <- predict(model_1, newdata = test_set)
+
+# Evaluate the performance of the model using the test set
+MSE_m1 <- mean((test_set$price - test_pred_1)^2) 
+MSE_m1
+```
+
+```{r m1_predictions}
+# construct predictions
+grid_1 <- df_clean %>% 
+  data_grid(sqft_living = seq_range(sqft_living, 20)) %>% 
+	# takes the data set and predicts 20 values in the range of min and max values of the 
+  add_predictions(model_1, "price")
+```
+
+```{r m1_predictions_b}
+library(prodlim)
+# Use the model to make predictions on the test set
+predictions_1 <- model_1 %>% predict(test_set)
+
+#Examine R-squared, RMSE, and MAE of predictions
+RMSE_m1 = sqrt(mean((test_set$price - predictions_1)^2))
+RMSE_m1
+```
+
+Plotting the model against the data. The red line 
+
+```{r m1_plot}
+ggplot(df_clean, aes(sqft_living, price)) + 
+  geom_hex(bins = 50) + 
+  geom_line(data = grid_1, colour = "red", linewidth = 1)+
+  labs(title = "linear Model (sqft_living)")
+```
+
+```{r m1_residuals}
+df_clean <- df_clean %>% 
+  add_residuals(model_1, "resid_1") 
+
+# explore residuals distribution
+# versus sqft_living
+
+# Plot using geom_hex
+ggplot(df_clean, aes(sqft_living, resid_1)) + 
+ geom_hex(bins = 50) +
+ geom_abline(slope = 0, color = "red", linewidth = 1) 
+
+```
+
+Our initial model, which considers only the sqft_living models acceptable for houses with small living rooms, but gets progressivly worse for the larger houses.
+
+## Model 2 (sqft log-log-scale)
+
+```{r m2_visualization}
+
+ggplot(df_clean, aes(sqft_living, price)) + 
+  geom_hex(bins = 50) + 
+  geom_line(data = grid_1, colour = "red", linewidth = 1) +
+  scale_y_log10() +
+  scale_x_log10() + 
+  ggtitle("Model 2 - double logscale") + 
+  xlab("log(sqft_living)")+
+  ylab("log(price)")
+  scale_fill_viridis_c()
+```
+
+```{r m2_creation}
+# Fit the model using the training set
+model_2 <- lm(log2(price) ~ log2(sqft_living), data = train_set)
+
+# Predict the target variable using the model and the training set
+train_pred_2 <- predict(model_2, newdata = train_set)
+
+# Predict the target variable using the model and the test set
+test_pred_2 <- predict(model_2, newdata = test_set)
+
+summary(model_2)
+
+# Evaluate the performance of the model using the test set
+MSE_m2 <- mean((test_set$price - test_pred_2)^2) 
+MSE_m2
+
+```
+
+Unfortunatly, this model2 seems to be worse than model1, since it has a smaller R^2^. But since the R^2^ metric is somewhat flawed, we could still investigate the model, without much hope that it is very good. (It is still fine for the little data we use for the creation.)
+
+```{r m2_predictions}
+# construct predictions in logscale
+grid_2 <- df_clean %>% 
+  data_grid(sqft_living = seq_range(sqft_living, 20)) %>% 
+  add_predictions(model_2, "lprice") %>% 
+  mutate(price = 2 ^ lprice)
+```
+
+```{r m2_residuals}
+df_clean <- df_clean %>% 
+  add_residuals(model_2, "resid_2") 
+```
+
+```{r m2_plots}
+# Plotting residuals
+ggplot(df_clean, aes(sqft_living, resid_2)) + 
+ geom_hex(bins = 50) +
+ geom_abline(slope = 0, color = "red", linewidth = 1) +
+  ggtitle("Model 2 - residuals")
+
+# Plotting Model2 in lin
+ggplot(df_clean, aes(sqft_living, price)) + 
+  geom_hex(bins = 50) + 
+  geom_line(data = grid_2, colour = "red", linewidth = 1) +
+  ggtitle("Model 2 - plot in linear scale") 
+
+# Plotting Model2 in double log
+ggplot(df_clean, aes(sqft_living, price)) + 
+  geom_bin2d(bins = 50) + 
+  geom_line(data = grid_2, colour = "red", linewidth = 1) +
+  scale_y_log10() +
+  scale_x_log10() +
+  ggtitle("Model 2 - double_log")
+  annotation_logticks() 
+```
+
+## Model refinement
+
+since our model only incorperates one value (sqft_living), we would like to add more information to increase the precision/accuracy of our model. Which of our variables could help predict the price of houses? ´The grading of the house, or the Number of bedrooms cpuld help explain our variable.
+
+```{r m2_res_grade}
+ggplot(df_clean, aes(x = grade, y = resid_2, fill = as.factor(grade))) +
+ geom_boxplot() +
+ geom_abline(slope = 0, color = "red", linewidth = 1)
+
+```
+
+```{r m2_res_bedrooms}
+ggplot(df_clean, aes(x = bedrooms, y = resid_2, fill = as.factor(bedrooms))) +
+ geom_boxplot() +
+ geom_abline(slope = 0, color = "red", linewidth = 1)
+```
+
+## Model 3 (linear grade)
+
+```{r model_3}
+# Fit the model using the training set
+model_3 <- lm(price ~ grade - 1, data = train_set)
+
+# Predict the target variable using the model and the training set
+train_pred_3 <- predict(model_3, newdata = train_set)
+
+# Predict the target variable using the model and the test set
+test_pred_3 <- predict(model_3, newdata = test_set)
+
+summary(model_3)
+
+# Evaluate the performance of the model using the test set
+MSE_m3 <- mean((test_set$price - test_pred_3)^2) 
+MSE_m3
+```
+
+```{r m3_predictions}
+# construct predictions
+grid_3 <- df_clean %>% 
+  data_grid(grade) %>% 
+  add_predictions(model_3, "price") 
+```
+
+```{r m3_plot_prediction}
+# plot the data + predictions
+
+ggplot(df_clean, aes(grade, y = price, fill = as.factor(grade))) +
+ geom_boxplot() +
+ geom_point(data = grid_3, colour = "red", size = 1)
+```
+
+In our third model we systematically underestimate high (and the lowest) graded houses, but overestimate some houses in the middle of the grade range. This trend could also be predicted by remembering the residuals of the m2 against the grade(s). so overall it is highly likely that using a different model than the linear one, will result in much better predictions.
+
+## Model 4 (multiple linear regression)
+
+```{r m4_multiple_linear_regression}
+# Fit the model using the training set
+model_4 <- lm(price ~ sqft_living + grade + bathrooms + view + bedrooms, data = train_set)
+
+# Predict the target variable using the model and the training set
+train_pred_4 <- predict(model_4, newdata = train_set)
+
+# Predict the target variable using the model and the test set
+test_pred_4 <- predict(model_4, newdata = test_set)
+
+summary(model_4)
+
+# Evaluate the performance of the model using the test set
+MSE_m4 <- mean((test_set$price - test_pred_4)^2) 
+MSE_m4
+
+```
+
+```{r m4_residuals}
+df_clean <- df_clean %>% 
+  add_residuals(model_4, "resid_4") 
+```
+
+```{r m4_predictions}
+# construct predictions
+resid_4 = model_4$residuals
+
+ggplot(df_clean, aes(x = price, y = resid_4)) + #, fill = as.factor(grade)
+ geom_hex(bins = 50) +
+ geom_abline(slope = 0, color = "red", linewidth = 1) +
+  ggtitle("Model 4 residuals")
+
+```
+
+plot the training and test data against simultaneously.
+
+```{r plot_m4}
+# Combine actual and predicted values for the training set
+train_plot_data <- data.frame(Actual = train_set$price, Predicted = train_pred_4)
+
+# Combine actual and predicted values for the test set
+test_plot_data <- data.frame(Actual = test_set$price, Predicted = test_pred_4)
+
+# Combine actual and predicted values for the training set and the test set
+plot_data <- rbind(
+ data.frame(Actual = train_set$price, Predicted = train_pred_4, Source = "Training"),
+ data.frame(Actual = test_set$price, Predicted = test_pred_4, Source = "Test")
+)
+
+# Create a scatter plot for both the training set and the test set
+# this time with colorblind-friendly colours
+ggplot(plot_data, aes(x = Actual, y = Predicted, color = Source)) +
+ geom_point() +
+ geom_smooth(method = "lm", formula = y ~ x, se = FALSE, linetype = "dashed") +
+ scale_color_brewer(type="qual", palette = 6) + # use the Qualitative palettes, and from them the 6th combination (eq. to "Set1")
+ labs(
+ x = "Actual Price", 
+ y = "Predicted Price", 
+ title = "Actual vs. Predicted Price - Model4"
+ ) +
+ theme_minimal()
+
+```
+
+Another variant to plot the residuals is in a QQ-plot, if the distribution follows the 45° line, the distributions should be equal. (This allows for the visual interpretation only.)
+
+```{r m4_QQ-plot}
+qqnorm(df_clean$resid_4)
+```
+
+# Model Overview
+
+```{r model_summaries-1}
+summary(model_1)
+summary(model_2)
+summary(model_3)
+summary(model_4)
+```
+
+```{r model_summaries-2}
+# Store the MSEs of the models in a vector
+MSEs <- c(MSE_m1, MSE_m2, MSE_m3, MSE_m4)
+
+# Create a bar plot
+ggplot(data.frame(
+  Models = factor(c("lin_sqft", "sqft log-log-scale", "lin_grade", "multi_lin"), 
+  levels = c("lin_sqft", "sqft log-log-scale", "lin_grade", "multi_lin")), 
+  MSEs = MSEs), 
+  aes(x = Models, y = MSEs)) +
+ geom_bar(stat = "identity") +
+ labs(
+ x = "Models", 
+ y = "Mean Squared Error", 
+ title = "MSE of Different Models"
+ ) +
+ theme_minimal()
+
+```
+
+```{r m1_plot_b}
+
+# Create a new plotting window and set the plotting area into a 2*2 array
+par(mfrow = c(2, 2))
+
+# Print the summary of the first model
+
+plot(model_1)
+mtext("Statistics Model 1", side = 3, line = -2, outer = TRUE, font=4)
+
+plot(model_2)
+mtext("Statistics Model 2", side = 3, line = -2, outer = TRUE, font=4)
+
+plot(model_3)
+mtext("Statistics Model 3", side = 3, line = -2, outer = TRUE, font=4)
+
+plot(model_4)
+mtext("Statistics Model 4", side = 3, line = -2, outer = TRUE, font=4)
+```
+
+# Modelling as in the lecture
+
+## SUBSET SELECTION
+```{r}
+
+library(leaps)
+
+# transform the 'sqft_living' into numeric to work with the subset selection
+train_set$sqft_living <- as.numeric(train_set$sqft_living)
+test_set$sqft_living <- as.numeric(test_set$sqft_living)
+
+# best subset selection
+bestSubsets <- regsubsets(price ~ sqft_living + grade + bathrooms + view + bedrooms, data = train_set)
+
+str(test_set)
+
+reg.summary<-summary(bestSubsets)
+reg.summary
+# output: in every row you see a model with the highest R squared 
+# for the given number of regressors,
+# and which variables it includes
+
+# extraxt the adj. R² of each model
+reg.summary$adjr2
+```
+
+
+this means for the best regression model we should use the variables additive in the following order: sqft_living, view, bedrooms, bathrooms; 
+
+```{r}
+# plot Mallows’ cp 
+plot(reg.summary$cp, xlab = "Number of variables", ylab = "C_p",type = "l")
+points(which.min(reg.summary$cp), reg.summary$cp[which.min(reg.summary$cp)],
+			 col = "red", cex = 2, pch = 20)
+coef(bestSubsets, which.min(reg.summary$cp))
+```
+
+
+```{r}
+# BIC
+plot(reg.summary$bic, xlab = "Number of variables", ylab = "BIC", type = "l")
+points(which.min(reg.summary$bic), reg.summary$bic[which.min(reg.summary$bic)],
+			 col = "red", cex = 2, pch = 20)
+coef(bestSubsets, which.min(reg.summary$bic))
+```
+
+## stepwise forward regression
+```{r stepwise_forward}
+
+bestSubsets.fwd <- regsubsets(price ~ sqft_living + grade + bathrooms + view + bedrooms, data = train_set, method = "forward")
+# regfit.fwd <- regsubsets(lpsa ~. -train, data = prostate_df[prostate_df$train, ],method = "forward")
+
+
+reg.summary.fwd <- summary(bestSubsets.fwd)
+# which model is the best according to Cp (forwards)
+coef(bestSubsets.fwd, which.min(reg.summary.fwd$cp))
+
+# which model is the best according to BIC (forwards)?
+coef(bestSubsets.fwd, which.min(reg.summary.fwd$bic))
+
+# Construct the best model according to BIC
+lm_best_fwd <- lm(price ~ sqft_living + grade + bathrooms + view + bedrooms, data = train_set)
+
+# Make predictions using matrix multiplication of the test matrix and the coefficients vector
+predict_best_fwd <- predict(lm_best_fwd, test_set)
+
+# Calculate the MSE
+mse_fwd <- mean((test_set$price - predict_best_fwd)^2)
+mse_fwd
+```
+
+# Discussion
+
+* Dataquality
+
+The Data itself, seem to be of high quality. There are no missing values, and the data set has about 22-thousand entries, in 13 categories. Additionally the entries themselves, seem to be correct, with no erroneous entries, which in itself is a good thing and helps build trust in the analysis.
+
+* As explored in the Data Exploration section, we could build a model, which considers the "waterfront" variable and interpret the data as a combination of two distinct populations, one with and one without waterfront, since this influences the house price.
+
+* Modelling
+Based on the adjusted R^2^-statistics, the most accurate price-model is based just on grade (0.7603), instead of the multiple linear model. The reasons for that could be manifold, some of the them could be:\
+- Overfitting: If only one of the predictors is responsible for the outcome, and all other variables add noise and no additional information, than a linear model will perform better, than a multiple linear model.\
+- non - linear-relationships: This is likely the case in our models. The visualization in the data exploration [\@section_plots](section_plots) can provide more details. shows, that there are some likely candidates, for example:  
+- bedrooms: gaussian (normal) distribution\
+- sqft_lot could be a combination of two Poisson distributions (one for 'small' lots/gardens, and oen for 'large' lots/gardens).
+
+* Conclusion: 
+
+In general the good quality of data allows for various transformations and interpretation possibilities. Here, some simple models were build on individual or multiple variables, with the best performing model as a linear model, based on grade of the house. 

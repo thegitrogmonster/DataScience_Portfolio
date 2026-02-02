@@ -1,0 +1,516 @@
+---
+title: "Verknüpfung und Speicherung großer Datenmengen - Project B"
+author: "Koch Mathias, Zamberger Bernd"
+date: "2024-01-03"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    toc_depth: 3
+    number_sections: yes
+    df_print: paged
+    fig_height: 7
+    fig_width: 10
+---
+# Introduction
+
+In this Project the goal is to ...
+
+1.  ... develop a research question.
+2.  ... identify Datasets which might help answer these questions.
+3.  ... investigate the research question.
+4.  ... Discuss the results.
+
+The Project is developed and executed by Mathias Koch and Bernd Zamberger during the course of "M.BDSC.B.22.WS23 Verarbeitung und Speicherung großer Datenmengen" at the FH Wiener Neustadt during the MS Studies in Bio Data Science. The course is led by [D. Iurashev](R113554@fhwn.ac.at). 
+
+## Detailed Task Description
+
+* Clean the data
+* Understand what is in the data — 
+	* are the data measurements or estimates? 
+	* How accurate are these measurements or estimates? Are there biases in the data (e.g. in the data gathering process)? 
+	* If you use estimates to make new estimates, how accurate are the new estimates?
+* Check for missing data points – decide what to do about them
+* Check for outliers – decide what to do about them
+* Check for inconsistencies – decide what to do about them
+* Calculate descriptive statistics
+* Transform the data (e.g. changing units of measurements)
+* Check if the necessary data is there to answer the questions. If not, then you could:
+	– Combine columns in some way to generate the necessary data
+	– Find the necessary data in another dataset
+	– Change the questions asked (in this case you have the freedom to do this, but this may not be the case if someone else is asking the questions)
+* Visualise the data
+* Calculate correlations
+* Check predictions
+
+
+# Research Question
+
+What are the trends in R&D-Expenses in europe?
+* Can we see differences between countries?
+* Are there trends which we can identify?
+
+# Setup
+
+```{r setup1, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+```{r r-version}
+# to get the version of R used in the notebook
+paste("The R Version used in this notebook is", getRversion())
+
+```
+
+specify the CRAN repository where the packages have been downloaded from.
+
+```{r repo}
+# Define the CRAN repository for this session
+r_rep = getOption("repos")
+r_rep["CRAN"] = "http://cran.us.r-project.org"
+options(repos = r_rep)
+
+```
+
+```{r libraries, collapse=TRUE}
+# Loading libraries
+
+# First should be installed
+# install.packages("eurostat")
+# install.packages("rvest")
+# install.packages("knitr")
+# install.packages("rgdal")
+# install.packages("countrycode")
+# install.packages("dplyr")
+# install.packages("reshape2")
+# install.packages("ggplot2")
+# install.packages("TraMineR")
+# install.packages("cluster")
+# install.packages("factoextra")
+# install.packages("RColorBrewer")
+# install.packages("leaflet")
+# install.packages("plotly")
+# install.packages("htmlwidgets")
+
+# And then should be loaded
+library(tidyr)
+library(readr)
+library(tidyverse)
+library(xts)
+library(eurostat)
+library(rvest)
+library(knitr)
+library(rgdal)
+library(countrycode)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(TraMineR)
+library(cluster)
+library(factoextra)
+library(RColorBrewer)
+library(leaflet)
+library(plotly)
+# library(htmlwidgets)
+```
+create a list of used packages
+```{r pkg-version, collapse=TRUE}
+# Create a list with all the available packages in my R environment
+pkg_used <- available.packages()
+
+# For every package print the version of the package, the version of R that depends on and the packages that imports
+paste("eurostat Version is:", pkg_used["eurostat", "Version"])
+
+paste("rvest Version is:", pkg_used["rvest", "Version"])
+
+paste("knitr Version is:", pkg_used["knitr", "Version"])
+
+# paste("rgdal Version is:", pkg_used["rgdal", "Version"])
+
+paste("countrycode Version is:", pkg_used["countrycode", "Version"])
+
+paste("dplyr Version is:", pkg_used["dplyr", "Version"])
+
+paste("reshape2 Version is:", pkg_used["reshape2", "Version"])
+
+paste("ggplot2 Version is:", pkg_used["ggplot2", "Version"])
+
+paste("TraMineR Version is:", pkg_used["TraMineR", "Version"])
+
+paste("cluster Version is:", pkg_used["cluster", "Version"])
+
+paste("factoextra Version is:", pkg_used["factoextra", "Version"])
+
+paste("RColorBrewer Version is:", pkg_used["RColorBrewer", "Version"])
+
+paste("leaflet Version is:", pkg_used["leaflet", "Version"])
+
+paste("plotly Version is:", pkg_used["plotly", "Version"])
+
+```
+## set seed
+
+```{r set-seed}
+set.seed(202375)
+```
+# Data
+
+## Downloads
+
+### Download the dataset
+
+```{r download}
+# Specify the ID of the dataset required
+
+id <- "rd_e_berdpfr2"
+
+# Request of the dataset
+rd_e_berd <- get_eurostat(id, time_format = "num")
+
+# filter the dataset down to the selected countries
+# filter based on the categories in unit
+rd_e_berd <- rd_e_berd %>% filter(unit %in% c("MIO_EUR"))
+
+# unique(rd_e_berd$unit)
+```
+
+
+```{r country-codes}
+# Countries of Intrest
+country_code_1 <- c("BE","CZ","DK","DE","ES","FR","IT","NL","AT","PL","FI","SE", "EU27")
+
+# EU 28
+country_code_2 <- c("AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE","GB")
+
+# EU 28 + (CH, NO)
+country_code_3 <- c("AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE","GB", "CH", "NO")
+```
+
+```{r}
+# filter the countries of interest
+rd_e_berd <- rd_e_berd %>%
+ filter(`geo` %in% country_code_3)
+
+# filter to only TOTAL values
+rd_e_berd <- rd_e_berd %>% filter(nace_r2 == "TOTAL")
+
+(rd_e_berd)
+```
+### Download the spatial data
+
+```{r geodata}
+# Specifying data directories
+home_dir <-"/proj/courses/2023_mg/cooler/Verarbeitung_Datenmengen/Project_B_Koch_Zamberger"
+geo_dir <- file.path(home_dir, "geo")
+
+# Specify the url that links to the zipped spatial datasets
+url = "http://ec.europa.eu/eurostat/cache/GISCO/distribution/v2/nuts/download/ref-nuts-2016-60m.shp.zip"
+
+destfile_geo<-file.path(geo_dir, "ref-nuts-2016-60m.shp.zip")
+
+# Download the file
+download.file(url, destfile_geo)
+
+# Unzip the bulk file
+unzip(destfile_geo, exdir = geo_dir)
+
+# Unzip the specific shapefile needed
+unzip(paste0(geo_dir, "/NUTS_RG_60M_2016_4326_LEVL_2.shp.zip"), exdir = geo_dir)
+
+# Read in the shapefile
+geodata <- readOGR(dsn = geo_dir, layer = "NUTS_RG_60M_2016_4326_LEVL_2")
+
+geodata_rd<-geodata
+```
+
+## country names
+
+```{r country_names}
+
+# Create a new column for country names
+geodata_rd@data$cntr_name <- countrycode(geodata_rd@data$CNTR_CODE, "iso2c", "country.name")
+
+# Because European commission uses EL for Greece (in ISO 3166-1 alpha-2 codes is GR) and UK for United Kingdom (in ISO 3166-1 alpha-2 codes is GB) I should replace these two countries manually
+geodata_rd@data$cntr_name <- ifelse(geodata_rd@data$CNTR_CODE=="EL","Greece", ifelse(geodata_rd@data$CNTR_CODE=="UK", "United Kingdom", geodata_rd@data$cntr_name))
+
+```
+
+## Count NA's 
+
+Creating a count_na function to count NA-values
+
+```{r na-count}
+count_na_func <- function(x) sum(is.na(x)) 
+
+# count the missing values and save the value in a new column
+rd_e_berd$count_na <- apply(rd_e_berd, 1, count_na_func)
+
+# How many NA values do we have
+sum(rd_e_berd$count_na)/length(rd_e_berd$values)
+
+summary(rd_e_berd$values)
+```
+### Cleanup of the dataset
+
+```{r cleanup1}
+# Create a new column to store the number of characters of the geography
+rd_e_berd$n_char <- nchar(as.character(rd_e_berd$geo))
+
+# Subset only the Countries - their geography code contains 2 characters  
+
+rd_e_berd_NUTS2 <- rd_e_berd %>% 
+  filter(n_char == 2)
+
+```
+
+The key stages followed in this notebook are described below with links to the particular sub-sections which provide some further technical clarifications:
+
+1.  [*Data pre-processing*], by classifying NUTS 2 regions into quintiles based on their total R&D spending each year from 2005 to 2022 (regions with the lowest R&D spending belong to the 1st quintile and regions with the highest R&D spending belong to the 5th quintile).
+2.  Create a [*sequence object*] based on the quintile each region belongs to in every year (i.e. from 2005 to 2022).
+3.  [*Measuring sequence dissimilarity*] based on substitution costs which is the probability of transitioning from one quintile to another (i.e. higher transition rate from 5th quintile to 1st quintile rather than from 2nd quintile to 3rd quintile).
+4.  Using the substitution costs calculated in the previous stage, a [*dissimilarity matrix*] was built including every pair of sequences. In this notebook the Optimal Matching (OM) algorithm was used. The algorithm substitutes the elements of each sequence based on their substitution costs which in turn is the OM distance between each pair of sequences.
+5.  In the last stage R&D spending trajectories were made using the resulting dissimilarity matrix from stage 4. Partitioning Around Medoids (PAM) clustering algorithm is used for the [*classification of sequences*]
+
+
+# Data Analysis
+
+```{r figure-1, fig.width=10,fig.height=7}
+# I change the years from numbers to characters so to be recognised as categorical rather than continuous variable
+head(rd_e_berd)
+
+rd_e_berd$TIME_PERIOD <- as.character(rd_e_berd$TIME_PERIOD)
+# Create a plot showing the rd expenses over the timeperiod
+
+rd_e_berd %>% 
+  group_by(TIME_PERIOD) %>% 
+  dplyr::filter(nace_r2=="TOTAL") %>%
+  summarise_all(mean, na.rm = TRUE) %>% 
+  ggplot() +
+  geom_bar(aes(x = TIME_PERIOD, y = values), stat = "identity", fill = "coral2") +
+  labs(title = "BERD for timeperiod",
+     x = "Year",
+     y = "Value",
+     caption = "Data downloaded from Eurostat\ncalculations made by the author") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r quintiles, }
+# Calculate quintiles by year 
+# It is good to specify  the filter function to be used from dplyr function to avoid error messages
+
+
+
+quant_data_rd <- NULL
+for (var in unique(rd_e_berd_NUTS2$TIME_PERIOD)) {
+    rd_e_berd_NUTS2_temp <- rd_e_berd_NUTS2 %>% 
+      dplyr::filter(TIME_PERIOD == var) %>% 
+      mutate(quintiles = ntile(values, 5) )
+    quant_data_rd <- rbind(quant_data_rd,rd_e_berd_NUTS2_temp)
+}
+
+quant_data_rd # every entry is placed into a category depended on their value and the quintiles calculated
+```
+
+```{r}
+# drop the percentage values
+quant_data_rd <- subset(quant_data_rd, select = -values)
+
+# Re-format the data from long to wide format
+# This means that every row will represent a region and every column represents a year
+
+quant_data_wide_rd <-
+  dcast(quant_data_rd,
+  nace_r2 + unit + geo + n_char ~ TIME_PERIOD,
+  value.var = 'quintiles')
+    # You can use the dcast function from the data.table package in R to reshape a data frame from a long format to a wide format.
+
+# We remove rows that do not have values in at least one year so we have consistency between sequences
+quant_data_wide_rd <- na.omit(quant_data_wide_rd)
+
+# Have a look at the dataset
+str(quant_data_wide_rd)
+```
+
+## *Sequence object*
+
+
+```{r sequence-object}
+
+# Create the sequence object using only the quintiles that every region belongs
+seq_obj_rd <- seqdef(quant_data_wide_rd[,5:22])
+```
+
+```{r subst_cost}
+
+# Calculate substitution costs
+subs_costs_rd <- seqsubm(seq_obj_rd, method = "TRATE")
+
+# Print the substitution costs
+kable(subs_costs_rd)
+```
+
+## *Dissimilarity matrix*
+
+
+```{r dist_matrix}
+# Calculate the distance matrix
+seq.OM_rd <- seqdist(seq_obj_rd, method = "OM", sm = subs_costs_rd)
+```
+
+
+## *Classification of sequences*
+
+```{r, fig.width=10,fig.height=7}
+# Assess different clustering solutions to specify the optimal number of clusters
+
+fviz_nbclust(seq.OM_rd, cluster::pam, method = "wss")
+```
+
+```{r, fig.width=10,fig.height=7}
+# Assess different clustering solutions to specify the optimal number of clusters
+
+fviz_nbclust(seq.OM_rd, cluster::pam, method = "silhouette")
+```
+
+```{r clustering}
+# Run clustering algorithm with k
+pam.res_rd <- pam(seq.OM_rd, 6)
+```
+
+## Visualizing the results
+
+```{r viz-1}
+
+# Assign the cluster group into the tabular dataset
+quant_data_wide_rd$cluster <- pam.res_rd$clustering
+
+# Then rename clusters 
+quant_data_wide_rd$cluster <- factor(quant_data_wide_rd$cluster, levels=c(1, 2, 3, 4, 5, 6),
+                                  labels=c("Cluster1",
+                                           "Cluster2",
+                                           "Cluster3",
+                                           "Cluster4",
+                                           "Cluster5",
+                                           "Cluster6"))
+unique(quant_data_wide_rd$cluster)
+```
+
+```{r stability_of_clusters-1, fig.width=10,fig.height=7}
+# Plot of individual sequences split by sequence group
+seqIplot(seq_obj_rd, group = quant_data_wide_rd$cluster, ylab = "Number of sequences")
+
+```
+
+```{r stability_of_clusters-2, fig.width=10,fig.height=7}
+
+# Distribution plot by sequence group
+# seqdplot(seq_obj_rd, group = quant_data_wide_rd$cluster, border=NA, ylab = "Distribution of sequences")
+
+```
+
+## Exploring spatio-temporal trends R&D Expenses
+
+```{r spatio-temporal trends}
+
+# Merge the spatial to the tabular dataset which includes the cluster names
+quant_data_wide_rd$CNTR_CODE <- countrycode(quant_data_wide_rd$geo, "country.name", "iso2c")
+
+quant_data_wide_rd$CNTR_CODE<-quant_data_wide_rd$geo
+quant_data_wide_rd
+
+# filter based on the categories in unit
+
+duplicated(quant_data_wide_rd$CNTR_CODE)
+str(quant_data_wide_rd)
+quant_data_wide_rd <- quant_data_wide_rd %>% filter(unit %in% c("MIO_EUR"))
+str(quant_data_wide_rd)
+
+map_data_rd <- merge(geodata_rd, quant_data_wide_rd, by.x="CNTR_CODE", by.y="geo", all.x=TRUE)
+```
+
+```{r mapping, fig.width=10,fig.height=7}
+
+
+# Create a map showing the distribution of sequence clusters
+
+# Specify the colour palette
+myColors_rd <- rev(brewer.pal(3,"RdYlGn"))
+pal_rd <- colorFactor(myColors_rd, domain = unique(map_data_rd$cluster))
+
+sort(unique(map_data_rd$cluster))
+
+# Create the initial background map, zooming in Europe
+colourmap_rd <- leaflet() %>% 
+  addTiles() %>% 
+  setView(lat = 55, lng = 1, zoom = 3)
+
+# Create the interactive map showing the sequence clusters
+colourmap_rd_fin <-colourmap_rd %>%
+  addPolygons(data = map_data_rd,
+    fillColor = ~pal_rd(cluster),
+    weight = 0.2,
+    opacity = 0.8,
+    color = "white",
+    dashArray = "3",
+    fillOpacity = 0.7,
+    popup = paste("Cluster: ", map_data_rd$cluster, "<br>",
+                  "NUTS 2 Name: ", map_data_rd$NUTS_NAME, "<br>",
+                  "Country Name: ", map_data_rd$cntr_name, "<br>"),
+    highlight = highlightOptions(
+      weight = 5,
+      color = "#666",
+      dashArray = "",
+      fillOpacity = 0.7,
+      bringToFront = TRUE)) %>% 
+  addLegend(pal = pal_rd,
+            values  = map_data_rd$cluster,
+            na.label = "Missing data",
+            position = "bottomleft",
+            title = "R&D_Spending")
+
+colourmap_rd_fin
+```
+
+```{r save-map}
+# saveWidget(colourmap_rd_fin, file = "EU_Clusters.html")
+```
+
+
+```{r country-stat}
+# Calculate country summary statistics
+freq_reg_rd <- map_data_rd@data %>%
+  group_by(cntr_name, cluster) %>%
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n)) 
+
+freq_reg_rd
+```
+
+```{r fig.width=10,fig.height=7}
+# reformat the data to order them by clusters frequency
+data_wide_rd <- dcast(freq_reg_rd, cntr_name ~ cluster, value.var="freq")
+data_wide_rd <- data_wide_rd[order(-data_wide_rd$"Cluster1",
+                            -data_wide_rd$"Cluster2",
+                            -data_wide_rd$"Cluster3",
+                            -data_wide_rd$"Cluster4",
+                            -data_wide_rd$"Cluster5",
+                            -data_wide_rd$"Cluster6"),]
+
+# Create a bar plot for country distribution of clusters
+distribution_plot_rd <- ggplot() + 
+  geom_bar(aes(y =  freq, x = cntr_name, fill = cluster), data = freq_reg_rd,  stat="identity")+
+  labs(title = "Distribution of R&D Spending across Europe", 
+       x = "Countries", y = "Proportion", fill = "") +
+  theme_minimal() +
+  theme(axis.text.x=element_text(angle = 90, hjust = 1)) +
+  scale_x_discrete(limits=c(data_wide_rd$cntr_name)) +
+  scale_fill_brewer(palette="RdYlGn", na.value = "grey64", direction = -1)
+  
+
+# Set an interactive mode to the plot
+ggplotly(distribution_plot_rd)
+
+```
+
